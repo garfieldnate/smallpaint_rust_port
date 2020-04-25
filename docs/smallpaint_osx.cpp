@@ -359,10 +359,10 @@ void render(int id, int size, int spp, double refr_index)
                 pix[j][i].x += c.x;
                 pix[j][i].y += c.y;
                 pix[j][i].z += c.z;
-                if (i == 359 && j == 420)
-                {
-                    cout << "final_color=" << c << "\n";
-                }
+                // if (i == 359 && j == 420)
+                // {
+                //     cout << "final_color=" << c << "\n";
+                // }
             }
         }
     }
