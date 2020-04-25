@@ -2,7 +2,7 @@ use rand::distributions::{Distribution, Uniform};
 use rand::rngs::ThreadRng;
 use rand::thread_rng;
 use std::fmt::Display;
-use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
+use std::ops::{Add, AddAssign, Mul, Sub};
 
 const EPSILON: f64 = 1e-4;
 
@@ -30,13 +30,6 @@ impl Vector3d {
     }
     pub fn dot(&self, other: Vector3d) -> f64 {
         self.x * other.x + self.y * other.y + self.z * other.z
-    }
-    pub fn cross(&self, other: Vector3d) -> Vector3d {
-        Vector3d {
-            x: self.y * other.z - self.z * other.y,
-            y: self.z * other.x - self.x * other.z,
-            z: self.x * other.y - self.y * other.x,
-        }
     }
 }
 
@@ -81,36 +74,6 @@ impl Mul<f64> for Vector3d {
     }
 }
 
-impl Mul<Vector3d> for f64 {
-    type Output = Vector3d;
-    fn mul(self, other: Vector3d) -> Vector3d {
-        other * self
-    }
-}
-
-impl Div<f64> for Vector3d {
-    type Output = Vector3d;
-    fn div(self, scalar: f64) -> Vector3d {
-        Vector3d {
-            x: self.x / scalar,
-            y: self.y / scalar,
-            z: self.z / scalar,
-        }
-    }
-}
-
-impl Neg for Vector3d {
-    type Output = Vector3d;
-    fn neg(self) -> Vector3d {
-        Vector3d {
-            x: -self.x,
-            y: -self.y,
-            z: -self.z,
-        }
-    }
-}
-// Wow, that vector implementation is waaaaay longer than it was in C++
-
 // Rays have origin and direction.
 // The direction vector should always be normalized.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -129,6 +92,7 @@ impl Ray {
 pub struct Material {
     pub color: Vector3d,
     pub emission: f64,
+    // TODO: use enum here instead
     pub material_type: u8,
 }
 
@@ -184,8 +148,8 @@ impl Obj for Plane {
 #[derive(Copy, Clone, Debug, PartialEq, Default)]
 pub struct Sphere {
     material: Material,
-    c: Vector3d,
     r: f64,
+    c: Vector3d,
 }
 impl Sphere {
     fn new(r: f64, c: Vector3d) -> Self {
@@ -200,6 +164,7 @@ impl Sphere {
 impl Obj for Sphere {
     fn intersect(&self, ray: &Ray) -> f64 {
         let b: f64 = ((ray.o - self.c) * 2.).dot(ray.d);
+        // TODO: reuse calculation here
         let c_: f64 = (ray.o - self.c).dot(ray.o - self.c) - (self.r * self.r);
         let mut disc: f64 = b * b - 4. * c_;
         if disc < 0. {
@@ -255,6 +220,7 @@ impl Scene {
         let mut closest_t = std::f64::INFINITY;
         for o in &self.objects {
             let t = o.intersect(ray);
+            // ignore intersections at or behind camera
             if t > EPSILON && t < closest_t {
                 closest_object = Some(o.as_ref());
                 closest_t = t;
@@ -344,7 +310,7 @@ impl Canvas {
     pub fn camcr(&mut self, x: usize, y: usize) -> Vector3d {
         let w: f64 = self.width as f64;
         let h: f64 = self.height as f64;
-        let fovx: f32 = std::f32::consts::PI / 4.;
+        let fovx: f32 = std::f32::consts::FRAC_PI_4;
         let fovy: f32 = (h / w) as f32 * fovx;
         let mut cam = Vector3d::new(
             ((2. * x as f64 - w) / w) * fovx.tan() as f64,
@@ -352,7 +318,7 @@ impl Canvas {
             -1.,
         );
         cam.x += self.jitter();
-        cam.y = cam.y + self.jitter();
+        cam.y += self.jitter();
         return cam;
     }
     pub fn add_color(&mut self, x: usize, y: usize, color: Vector3d) {
@@ -462,8 +428,9 @@ fn trace(
     depth: u8,
     color: &mut Vector3d,
     params: Params,
-    mut hal1: Halton,
-    mut hal2: Halton,
+    hal1: &mut Halton,
+    hal2: &mut Halton,
+    log: bool,
 ) {
     if depth >= 20 {
         return;
@@ -476,6 +443,9 @@ fn trace(
             let hit_point: Vector3d = ray.o + ray.d * intersection.t;
             let mut normal: Vector3d = intersection.object.normal(hit_point);
             ray.o = hit_point;
+            if log {
+                eprintln!("hit_point={}, normal={}", hit_point, normal);
+            }
 
             let material: Material = intersection.object.get_material();
             *color += Vector3d::new(material.emission, material.emission, material.emission) * 2.;
@@ -486,7 +456,7 @@ fn trace(
                 ray.d = normal + hemisphere(hal1.get(), hal2.get());
                 let cost: f64 = ray.d.dot(normal);
                 let mut tmp = Vector3d::default();
-                trace(ray, scene, depth + 1, &mut tmp, params, hal1, hal2);
+                trace(ray, scene, depth + 1, &mut tmp, params, hal1, hal2, log);
                 color.x += cost * (tmp.x * material.color.x) * 0.1;
                 color.y += cost * (tmp.y * material.color.y) * 0.1;
                 color.z += cost * (tmp.z * material.color.z) * 0.1;
@@ -494,7 +464,7 @@ fn trace(
                 let cost: f64 = ray.d.dot(normal);
                 ray.d = (ray.d - normal * (cost * 2.)).norm();
                 let mut tmp = Vector3d::default();
-                trace(ray, scene, depth + 1, &mut tmp, params, hal1, hal2);
+                trace(ray, scene, depth + 1, &mut tmp, params, hal1, hal2, log);
                 *color += tmp;
             } else if material.material_type == 3 {
                 let mut n: f64 = params.refractive_index;
@@ -510,7 +480,7 @@ fn trace(
                     ray.d = (ray.d * n) + (normal * (n * cost1 - cost2.sqrt()));
                     ray.d = ray.d.norm();
                     let mut tmp = Vector3d::default();
-                    trace(ray, scene, depth + 1, &mut tmp, params, hal1, hal2);
+                    trace(ray, scene, depth + 1, &mut tmp, params, hal1, hal2, log);
                     *color += tmp;
                 } else {
                     return;
@@ -600,20 +570,29 @@ fn render(size: usize, params: Params) -> Canvas {
     let mut canvas = Canvas::new(size, size);
 
     // correlated Halton-sequence dimensions
-    let hal1 = Halton::new(0, 2);
-    let hal2 = Halton::new(0, 2);
+    let mut hal1 = Halton::new(0, 2);
+    let mut hal2 = Halton::new(0, 2);
 
     for s in 0..params.samples_per_pixel {
         eprintln!("sample={}", s);
         // #pragma omp parallel for schedule(dynamic) firstprivate(hal, hal2)
-        for i in 0..canvas.width {
-            for j in 0..canvas.height {
+        for row in 0..canvas.height {
+            for column in 0..canvas.width {
                 let mut color = Vector3d::default();
-                let cam = canvas.camcr(i, j);
-                // original had (cam - ray.o).norm(), but ray.o was always vec(0,0,0)
+                let cam = canvas.camcr(column, row);
                 let mut ray = Ray::new(Vector3d::default(), cam.norm());
-                trace(&mut ray, &scene, 0, &mut color, params, hal1, hal2);
-                canvas.add_color(j, i, color);
+                let log = false; //column == 359 && row == 420;
+
+                if log {
+                    eprintln!("ray_before={:?}", ray);
+                }
+                trace(
+                    &mut ray, &scene, 0, &mut color, params, &mut hal1, &mut hal2, log,
+                );
+                canvas.add_color(row, column, color);
+                if log {
+                    eprintln!("final_color={}, ray_after={:?}", color, ray);
+                }
             }
         }
     }
@@ -625,7 +604,7 @@ fn main() {
         512,
         Params {
             refractive_index: 1.5,
-            samples_per_pixel: 50,
+            samples_per_pixel: 200,
         },
     );
     println!("{}", canvas.to_ppm());
