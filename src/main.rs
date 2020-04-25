@@ -1,6 +1,6 @@
-use rand::distributions::{Distribution, Uniform};
-use rand::rngs::ThreadRng;
-use rand::thread_rng;
+use rand::distributions::OpenClosed01;
+use rand::{thread_rng, Rng};
+use rayon::prelude::*;
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Mul, Sub};
 
@@ -112,7 +112,7 @@ impl Material {
 }
 
 // All object should be intersectable and should be able to compute their surface normals.
-pub trait Obj {
+pub trait Obj: Sync {
     fn intersect(&self, ray: &Ray) -> f64;
     fn normal(&self, point: Vector3d) -> Vector3d;
     fn get_material(&self) -> Material;
@@ -286,10 +286,10 @@ impl Halton {
 pub struct Canvas {
     pub width: usize,
     pub height: usize,
-    rng: ThreadRng,
     data: Vec<Vec<Vector3d>>,
-    dist: Uniform<f64>,
 }
+
+unsafe impl Sync for Canvas {}
 
 const MAX_PPM_COLOR_VAL: u16 = 255;
 const MAX_PPM_LINE_LENGTH: usize = 70;
@@ -302,18 +302,15 @@ impl Canvas {
         Canvas {
             width,
             height,
-            rng: thread_rng(),
             data: vec![vec![Vector3d::default(); width]; height],
-            dist: Uniform::from(-1. ..1.),
         }
     }
-    fn jitter(&mut self) -> f64 {
-        let sample = self.dist.sample(&mut self.rng);
-        // eprintln!("{}", sample);
-        sample / 700.
+    fn jitter(&self) -> f64 {
+        let sample: f64 = thread_rng().sample(OpenClosed01);
+        return sample / 700.;
     }
 
-    pub fn camcr(&mut self, x: usize, y: usize) -> Vector3d {
+    pub fn camcr(&self, x: usize, y: usize) -> Ray {
         let w: f64 = self.width as f64;
         let h: f64 = self.height as f64;
         let fovx: f32 = std::f32::consts::FRAC_PI_4;
@@ -325,7 +322,7 @@ impl Canvas {
         );
         cam.x += self.jitter();
         cam.y += self.jitter();
-        return cam;
+        Ray::new(Vector3d::default(), cam.norm())
     }
     pub fn add_color(&mut self, x: usize, y: usize, color: Vector3d) {
         if x <= self.width && y <= self.height {
@@ -564,33 +561,63 @@ fn render(size: usize, params: Params) -> Canvas {
 
     let mut canvas = Canvas::new(size, size);
 
-    // correlated Halton-sequence dimensions
-    let mut hal1 = Halton::new(0, 2);
-    let mut hal2 = Halton::new(0, 2);
+    // // correlated Halton-sequence dimensions
+    // let mut hal1 = Halton::new(0, 2);
+    // let mut hal2 = Halton::new(0, 2);
 
-    for s in 0..params.samples_per_pixel {
-        eprintln!("sample={}", s);
-        // #pragma omp parallel for schedule(dynamic) firstprivate(hal, hal2)
-        for row in 0..canvas.height {
-            for column in 0..canvas.width {
-                let mut color = Vector3d::default();
-                let cam = canvas.camcr(column, row);
-                let mut ray = Ray::new(Vector3d::default(), cam.norm());
-                let log = false; //column == 359 && row == 420;
+    let mut data = vec![vec![Vector3d::default(); canvas.width]; canvas.height];
+    data.par_iter_mut()
+        // .chunks_mut(1) // iterate each column
+        .enumerate() // generate an index for each column we're iterating
+        .for_each(|(col_index, row)| {
+            eprintln!("Col={}", col_index);
 
-                if log {
-                    eprintln!("ray_before={:?}", ray);
-                }
-                trace(
-                    &mut ray, &scene, 0, &mut color, params, &mut hal1, &mut hal2, log,
-                );
-                canvas.add_color(row, column, color);
-                if log {
-                    eprintln!("final_color={}, ray_after={:?}", color, ray);
+            // correlated Halton-sequence dimensions
+            let mut hal1 = Halton::new(0, 2);
+            let mut hal2 = Halton::new(0, 2);
+            for (row_index, pixel) in row.iter_mut().enumerate() {
+                for _ in 0..params.samples_per_pixel {
+                    let mut color = Vector3d::default();
+                    let mut ray = canvas.camcr(col_index, row_index);
+                    trace(
+                        &mut ray, &scene, 0, &mut color, params, &mut hal1, &mut hal2, false,
+                    );
+                    *pixel += color;
                 }
             }
-        }
-    }
+            // eprintln!("Col={}, row={:?}", column_index, row);
+            // eprintln!("Col={}", column_index);
+        });
+
+    canvas.data = data;
+    // (0..params.samples_per_pixel).into_par_iter().for_each_with(
+    //     (hal1, hal2),
+    //     |(mut hal1, mut hal2), s| {
+    //         // for s in 0..params.samples_per_pixel {
+    //         eprintln!("sample={}", s);
+    //         // #pragma omp parallel for schedule(dynamic) firstprivate(hal, hal2)
+    //         for row in 0..canvas.height {
+    //             for column in 0..canvas.width {
+    //                 let mut color = Vector3d::default();
+    //                 let cam = canvas.camcr(column, row);
+    //                 let mut ray = Ray::new(Vector3d::default(), cam.norm());
+    //                 let log = false; //column == 359 && row == 420;
+
+    //                 if log {
+    //                     eprintln!("ray_before={:?}", ray);
+    //                 }
+    //                 trace(
+    //                     &mut ray, &scene, 0, &mut color, params, &mut hal1, &mut hal2, log,
+    //                 );
+    //                 canvas.add_color(row, column, color);
+    //                 if log {
+    //                     eprintln!("final_color={}, ray_after={:?}", color, ray);
+    //                 }
+    //             }
+    //         }
+    //         // }
+    //     },
+    // );
     canvas
 }
 
