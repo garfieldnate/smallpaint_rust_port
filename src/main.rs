@@ -1,13 +1,10 @@
 use rand::distributions::OpenClosed01;
+use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
 
 const EPSILON: f64 = 1e-4;
-
-fn rnd() -> f64 {
-	thread_rng().sample(OpenClosed01)
-}
 
 #[derive(Copy, Clone, Debug, PartialEq, Default)]
 pub struct Vector3d {
@@ -317,6 +314,7 @@ impl Halton {
 pub struct Canvas {
 	pub width: usize,
 	pub height: usize,
+	rng: ThreadRng,
 	data: Vec<Vec<Vector3d>>,
 }
 
@@ -331,19 +329,28 @@ impl Canvas {
 		Canvas {
 			width,
 			height,
+			rng: thread_rng(),
 			data: vec![vec![Vector3d::default(); width]; height],
 		}
 	}
-	fn camcr(&self, x: usize, y: usize) -> Vector3d {
+	fn jitter(&mut self) -> f64 {
+		let sample: f64 = self.rng.sample(OpenClosed01);
+		sample / 700.
+	}
+
+	pub fn camcr(&mut self, x: usize, y: usize) -> Vector3d {
 		let w: f64 = self.width as f64;
 		let h: f64 = self.height as f64;
 		let fovx: f32 = std::f32::consts::PI / 4.;
 		let fovy: f32 = (h / w) as f32 * fovx;
-		return Vector3d::new(
+		let mut cam = Vector3d::new(
 			((2. * x as f64 - w) / w) * fovx.tan() as f64,
 			((2. * y as f64 - h) / h) * fovy.tan() as f64,
 			-1.,
 		);
+		cam.x += self.jitter();
+		cam.y = cam.y + self.jitter();
+		return cam;
 	}
 	pub fn add_color(&mut self, x: usize, y: usize, color: Vector3d) {
 		if x <= self.width && y <= self.height {
@@ -599,9 +606,7 @@ fn render(size: usize, params: Params) -> Canvas {
 		for i in 0..canvas.width {
 			for j in 0..canvas.height {
 				let mut color = Vector3d::default();
-				let mut cam = canvas.camcr(i, j);
-				cam.x = cam.x + rnd() / 700.;
-				cam.y = cam.y + rnd() / 700.;
+				let cam = canvas.camcr(i, j);
 				// original had (cam - ray.o).norm(), but ray.o was always vec(0,0,0)
 				let mut ray = Ray::new(Vector3d::default(), cam.norm());
 				trace(&mut ray, &scene, 0, &mut color, params, hal1, hal2);
