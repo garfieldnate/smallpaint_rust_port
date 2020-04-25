@@ -296,6 +296,7 @@ void trace(Ray &ray, const Scene &scene, int depth, Vec &clr, pl &params, Halton
 			return;
 	}
 }
+
 void render(int id, int size, int spp, double refr_index)
 {
 
