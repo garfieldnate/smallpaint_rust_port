@@ -383,6 +383,8 @@ impl Canvas {
 				max_val = max_val.max(color.x).max(color.y).max(color.z);
 			}
 		}
+		// TODO: take 99th percentile to prevent outliers from turning the scene gray
+		eprintln!("max color value was {}", max_val);
 		max_val
 	}
 
