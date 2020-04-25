@@ -1,4 +1,4 @@
-use rand::distributions::OpenClosed01;
+use rand::distributions::{Distribution, OpenClosed01, Uniform};
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
 use std::fmt::Display;
@@ -316,6 +316,7 @@ pub struct Canvas {
 	pub height: usize,
 	rng: ThreadRng,
 	data: Vec<Vec<Vector3d>>,
+	dist: Uniform<f64>,
 }
 
 const MAX_PPM_COLOR_VAL: u16 = 255;
@@ -331,11 +332,11 @@ impl Canvas {
 			height,
 			rng: thread_rng(),
 			data: vec![vec![Vector3d::default(); width]; height],
+			dist: Uniform::from(-1. ..1.),
 		}
 	}
 	fn jitter(&mut self) -> f64 {
-		let sample: f64 = self.rng.sample(OpenClosed01);
-		sample / 700.
+		self.dist.sample(&mut self.rng) / 700.
 	}
 
 	pub fn camcr(&mut self, x: usize, y: usize) -> Vector3d {
