@@ -320,7 +320,7 @@ pub struct Canvas {
 	data: Vec<Vec<Vector3d>>,
 }
 
-const MAX_COLOR_VAL: u16 = 255;
+const MAX_PPM_COLOR_VAL: u16 = 255;
 const MAX_PPM_LINE_LENGTH: usize = 70;
 // length of "255" is 3
 // TODO: this should be evaluated programmatically, but "no matching in consts allowed" error prevented this
@@ -349,7 +349,6 @@ impl Canvas {
 		if x <= self.width && y <= self.height {
 			self.data[y][x] += color;
 		} else {
-			// TODO: return fail result
 		}
 	}
 
@@ -358,9 +357,9 @@ impl Canvas {
 	}
 
 	// scale/clamp color values from 0-1 to 0-255
-	fn scale_color(&self, rgb: f64) -> u8 {
-		(rgb * MAX_COLOR_VAL as f64)
-			.min(MAX_COLOR_VAL as f64)
+	fn scale_color(&self, norm_by: f64, rgb: f64) -> u8 {
+		((rgb / norm_by) * MAX_PPM_COLOR_VAL as f64)
+			.min(MAX_PPM_COLOR_VAL as f64)
 			.max(0.0) as u8
 	}
 
@@ -376,13 +375,26 @@ impl Canvas {
 		}
 	}
 
+	pub fn determine_max_color_value(&self) -> f64 {
+		let mut max_val: f64 = 0.;
+		for row in 0..self.height {
+			for column in 0..self.width {
+				let color = self.pixel_at(column, row);
+				max_val = max_val.max(color.x).max(color.y).max(color.z);
+			}
+		}
+		max_val
+	}
+
 	// Return string containing PPM (portable pixel map) data representing current canvas
 	pub fn to_ppm(&self) -> String {
 		let mut ppm = String::new();
 		// write header
 		ppm.push_str("P3\n");
 		ppm.push_str(&(format!("{} {}\n", self.width, self.height)));
-		ppm.push_str(&(format!("{}\n", MAX_COLOR_VAL)));
+		ppm.push_str(&(format!("{}\n", MAX_PPM_COLOR_VAL)));
+
+		let max_color_val = self.determine_max_color_value();
 
 		// Write pixel data. Each pixel RGB value is written with a separating space or newline;
 		// new rows are written on new lines for human reading convenience, but lines longer than
@@ -392,9 +404,9 @@ impl Canvas {
 			current_line.clear();
 			for (i, column) in (0..self.width).enumerate() {
 				let color = self.pixel_at(column, row);
-				let r = self.scale_color(color.x);
-				let g = self.scale_color(color.y);
-				let b = self.scale_color(color.z);
+				let r = self.scale_color(max_color_val, color.x);
+				let g = self.scale_color(max_color_val, color.y);
+				let b = self.scale_color(max_color_val, color.z);
 
 				current_line.push_str(&r.to_string());
 				self.write_rgb_separator(&mut current_line, &mut ppm);
@@ -580,7 +592,7 @@ fn render(size: usize, params: Params) -> Canvas {
 	let hal2 = Halton::new(0, 2);
 
 	for s in 0..params.samples_per_pixel {
-		println!("sample={}", s);
+		eprintln!("sample={}", s);
 		// #pragma omp parallel for schedule(dynamic) firstprivate(hal, hal2)
 		for i in 0..canvas.width {
 			for j in 0..canvas.height {
@@ -591,7 +603,7 @@ fn render(size: usize, params: Params) -> Canvas {
 				// original had (cam - ray.o).norm(), but ray.o was always vec(0,0,0)
 				let mut ray = Ray::new(Vector3d::default(), cam.norm());
 				trace(&mut ray, &scene, 0, &mut color, params, hal1, hal2);
-				canvas.add_color(i, j, color);
+				canvas.add_color(j, i, color);
 			}
 		}
 	}

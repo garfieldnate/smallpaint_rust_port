@@ -374,7 +374,7 @@ void render(int id, int size, int spp, double refr_index)
 
 	// Save the results to file
 	FILE *f = fopen("ray.ppm", "w");
-	fprintf(f, "P3\n%d %d\n%d\n ", width, height, 12000); // Note: 12000 is a random guess. We should be doing 255 and normalizing the output values.
+	fprintf(f, "P3\n%d %d\n%d\n ", width, height, 12000); // Note: 	 is a random guess. We should be doing 255 and normalizing the output values.
 	for (int row = 0; row < height; row++)
 	{
 		for (int col = 0; col < width; col++)
