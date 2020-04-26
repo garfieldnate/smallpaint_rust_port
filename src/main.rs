@@ -87,44 +87,58 @@ impl Ray {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum MaterialType {
+    DIFFUSE,
+    SPECULAR,
+    REFRACTIVE,
+}
+
 // Objects have color, emission, type (diffuse, specular, refractive)
-#[derive(Copy, Clone, Debug, PartialEq, Default)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Material {
     pub color: Vector3d,
     pub emission: f64,
-    // TODO: use enum here instead
-    pub material_type: u8,
+    pub material_type: MaterialType,
+}
+impl Material {
+    fn new(color: Vector3d, emission: f64, material_type: MaterialType) -> Self {
+        Self {
+            color,
+            emission,
+            material_type,
+        }
+    }
 }
 
 // All object should be intersectable and should be able to compute their surface normals.
 pub trait Obj {
     fn intersect(&self, ray: &Ray) -> f64;
     fn normal(&self, point: Vector3d) -> Vector3d;
-    fn set_material(&mut self, m: Material);
     fn get_material(&self) -> Material;
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Default)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Plane {
-    material: Material,
-    d: f64,
+    position: f64,
     n: Vector3d,
+    material: Material,
 }
 impl Plane {
-    fn new(d: f64, n: Vector3d) -> Self {
+    fn new(position: f64, n: Vector3d, material: Material) -> Self {
         Self {
-            d,
+            position,
             n,
-            ..Default::default()
+            material,
         }
     }
 }
 
 impl Obj for Plane {
     fn intersect(&self, ray: &Ray) -> f64 {
-        let d0: f64 = self.n.dot(ray.d);
-        if d0 != 0. {
-            let t: f64 = -1. * (((self.n.dot(ray.o)) + self.d) / d0);
+        let position_0: f64 = self.n.dot(ray.d);
+        if position_0 != 0. {
+            let t: f64 = -1. * (((self.n.dot(ray.o)) + self.position) / position_0);
             if t > EPSILON {
                 t
             } else {
@@ -137,35 +151,32 @@ impl Obj for Plane {
     fn normal(&self, _point: Vector3d) -> Vector3d {
         self.n
     }
-    fn set_material(&mut self, m: Material) {
-        self.material = m;
-    }
     fn get_material(&self) -> Material {
         self.material
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Default)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Sphere {
+    radius: f64,
+    center: Vector3d,
     material: Material,
-    r: f64,
-    c: Vector3d,
 }
 impl Sphere {
-    fn new(r: f64, c: Vector3d) -> Self {
+    fn new(radius: f64, center: Vector3d, material: Material) -> Self {
         Self {
-            r,
-            c,
-            ..Default::default()
+            radius,
+            center,
+            material,
         }
     }
 }
 
 impl Obj for Sphere {
     fn intersect(&self, ray: &Ray) -> f64 {
-        let b: f64 = ((ray.o - self.c) * 2.).dot(ray.d);
+        let b: f64 = ((ray.o - self.center) * 2.).dot(ray.d);
         // TODO: reuse calculation here
-        let c_: f64 = (ray.o - self.c).dot(ray.o - self.c) - (self.r * self.r);
+        let c_: f64 = (ray.o - self.center).dot(ray.o - self.center) - (self.radius * self.radius);
         let mut disc: f64 = b * b - 4. * c_;
         if disc < 0. {
             return 0.;
@@ -185,10 +196,7 @@ impl Obj for Sphere {
         }
     }
     fn normal(&self, p0: Vector3d) -> Vector3d {
-        return (p0 - self.c).norm();
-    }
-    fn set_material(&mut self, m: Material) {
-        self.material = m;
+        return (p0 - self.center).norm();
     }
     fn get_material(&self) -> Material {
         self.material
@@ -255,19 +263,17 @@ impl Halton {
     // TODO: I tried to make `new` clearer, but this one I don't understand at all
     fn next(&mut self) {
         let r: f64 = 1. - self.value - 1e-7;
-        if self.inv_base < r {
-            self.value += self.inv_base;
+        self.value += if self.inv_base < r {
+            self.inv_base
         } else {
             let mut h: f64 = self.inv_base;
-            let mut hh: f64;
             loop {
-                hh = h;
+                let hh = h;
                 h *= self.inv_base;
                 if h < r {
-                    break;
+                    break hh + h - 1.;
                 }
             }
-            self.value += hh + h - 1.;
         }
     }
 
@@ -359,8 +365,6 @@ impl Canvas {
                 max_val = max_val.max(color.x).max(color.y).max(color.z);
             }
         }
-        // TODO: take 99th percentile to prevent outliers from turning the scene gray
-        eprintln!("max color value was {}", max_val);
         max_val
     }
 
@@ -450,40 +454,44 @@ fn trace(
             let material: Material = intersection.object.get_material();
             *color += Vector3d::new(material.emission, material.emission, material.emission) * 2.;
 
-            if material.material_type == 1 {
-                hal1.next();
-                hal2.next();
-                ray.d = normal + hemisphere(hal1.get(), hal2.get());
-                let cost: f64 = ray.d.dot(normal);
-                let mut tmp = Vector3d::default();
-                trace(ray, scene, depth + 1, &mut tmp, params, hal1, hal2, log);
-                color.x += cost * (tmp.x * material.color.x) * 0.1;
-                color.y += cost * (tmp.y * material.color.y) * 0.1;
-                color.z += cost * (tmp.z * material.color.z) * 0.1;
-            } else if material.material_type == 2 {
-                let cost: f64 = ray.d.dot(normal);
-                ray.d = (ray.d - normal * (cost * 2.)).norm();
-                let mut tmp = Vector3d::default();
-                trace(ray, scene, depth + 1, &mut tmp, params, hal1, hal2, log);
-                *color += tmp;
-            } else if material.material_type == 3 {
-                let mut n: f64 = params.refractive_index;
-                if normal.dot(ray.d) > 0. {
-                    normal = normal * -1.;
-                    // TODO: wouldn't this just mean we should skip both 1/n calculations?
-                    n = 1. / n;
+            match material.material_type {
+                MaterialType::DIFFUSE => {
+                    hal1.next();
+                    hal2.next();
+                    ray.d = normal + hemisphere(hal1.get(), hal2.get());
+                    let cost: f64 = ray.d.dot(normal);
+                    let mut tmp = Vector3d::default();
+                    trace(ray, scene, depth + 1, &mut tmp, params, hal1, hal2, log);
+                    color.x += cost * (tmp.x * material.color.x) * 0.1;
+                    color.y += cost * (tmp.y * material.color.y) * 0.1;
+                    color.z += cost * (tmp.z * material.color.z) * 0.1;
                 }
-                n = 1. / n;
-                let cost1: f64 = (normal.dot(ray.d)) * -1.;
-                let cost2: f64 = 1.0 - n * n * (1.0 - cost1 * cost1);
-                if cost2 > 0. {
-                    ray.d = (ray.d * n) + (normal * (n * cost1 - cost2.sqrt()));
-                    ray.d = ray.d.norm();
+                MaterialType::SPECULAR => {
+                    let cost: f64 = ray.d.dot(normal);
+                    ray.d = (ray.d - normal * (cost * 2.)).norm();
                     let mut tmp = Vector3d::default();
                     trace(ray, scene, depth + 1, &mut tmp, params, hal1, hal2, log);
                     *color += tmp;
-                } else {
-                    return;
+                }
+                MaterialType::REFRACTIVE => {
+                    let mut n: f64 = params.refractive_index;
+                    if normal.dot(ray.d) > 0. {
+                        normal = normal * -1.;
+                        // TODO: wouldn't this just mean we should skip both 1/n calculations?
+                        n = 1. / n;
+                    }
+                    n = 1. / n;
+                    let cost1: f64 = (normal.dot(ray.d)) * -1.;
+                    let cost2: f64 = 1.0 - n * n * (1.0 - cost1 * cost1);
+                    if cost2 > 0. {
+                        ray.d = (ray.d * n) + (normal * (n * cost1 - cost2.sqrt()));
+                        ray.d = ray.d.norm();
+                        let mut tmp = Vector3d::default();
+                        trace(ray, scene, depth + 1, &mut tmp, params, hal1, hal2, log);
+                        *color += tmp;
+                    } else {
+                        return;
+                    }
                 }
             }
         }
@@ -491,81 +499,68 @@ fn trace(
 }
 
 fn render(size: usize, params: Params) -> Canvas {
-    // srand(time(NULL));
-
     let mut scene = Scene::new();
-    let mut add = |mut obj: Box<dyn Obj>, color: Vector3d, emission: f64, material_type: u8| {
-        let material = Material {
-            color,
-            emission,
-            material_type,
-        };
-        obj.set_material(material);
-        scene.add(obj);
-    };
 
-    // Radius, position, color, emission, type (1=diff, 2=spec, 3=refr) for spheres
-    add(
-        Box::new(Sphere::new(1.05, Vector3d::new(1.45, -0.75, -4.4))),
-        Vector3d::new(4., 8., 4.),
-        0.,
-        2,
-    ); // Middle sphere
-    add(
-        Box::new(Sphere::new(0.5, Vector3d::new(2.05, 2.0, -3.7))),
-        Vector3d::new(10., 10., 1.),
-        0.,
-        3,
-    ); // Right sphere
-    add(
-        Box::new(Sphere::new(0.6, Vector3d::new(1.95, -1.75, -3.1))),
-        Vector3d::new(4., 4., 12.),
-        0.,
-        1,
-    ); // Left sphere
-       // Position, normal, color, emission, type for planes
-    add(
-        Box::new(Plane::new(2.5, Vector3d::new(-1., 0., 0.))),
-        Vector3d::new(6., 6., 6.),
-        0.,
-        1,
-    ); // Bottom plane
-    add(
-        Box::new(Plane::new(5.5, Vector3d::new(0., 0., 1.))),
-        Vector3d::new(6., 6., 6.),
-        0.,
-        1,
-    ); // Back plane
-    add(
-        Box::new(Plane::new(2.75, Vector3d::new(0., 1., 0.))),
-        Vector3d::new(10., 2., 2.),
-        0.,
-        1,
-    ); // Left plane
-    add(
-        Box::new(Plane::new(2.75, Vector3d::new(0., -1., 0.))),
-        Vector3d::new(2., 10., 2.),
-        0.,
-        1,
-    ); // Right plane
-    add(
-        Box::new(Plane::new(3.0, Vector3d::new(1., 0., 0.))),
-        Vector3d::new(6., 6., 6.),
-        0.,
-        1,
-    ); // Ceiling plane
-    add(
-        Box::new(Plane::new(0.5, Vector3d::new(0., 0., -1.))),
-        Vector3d::new(6., 6., 6.),
-        0.,
-        1,
-    ); // Front plane
-    add(
-        Box::new(Sphere::new(0.5, Vector3d::new(-1.9, 0., -3.))),
-        Vector3d::new(0., 0., 0.),
-        120.,
-        1,
-    ); // Light
+    // Middle sphere
+    scene.add(Box::new(Sphere::new(
+        1.05,
+        Vector3d::new(1.45, -0.75, -4.4),
+        Material::new(Vector3d::new(4., 8., 4.), 0., MaterialType::SPECULAR),
+    )));
+    // Right sphere
+    scene.add(Box::new(Sphere::new(
+        0.5,
+        Vector3d::new(2.05, 2.0, -3.7),
+        Material::new(Vector3d::new(10., 10., 1.), 0., MaterialType::REFRACTIVE),
+    )));
+    // Left sphere
+    scene.add(Box::new(Sphere::new(
+        0.6,
+        Vector3d::new(1.95, -1.75, -3.1),
+        Material::new(Vector3d::new(4., 4., 12.), 0., MaterialType::DIFFUSE),
+    )));
+    // Bottom plane
+    scene.add(Box::new(Plane::new(
+        2.5,
+        Vector3d::new(-1., 0., 0.),
+        Material::new(Vector3d::new(6., 6., 6.), 0., MaterialType::DIFFUSE),
+    )));
+    // Back plane
+    scene.add(Box::new(Plane::new(
+        5.5,
+        Vector3d::new(0., 0., 1.),
+        Material::new(Vector3d::new(6., 6., 6.), 0., MaterialType::DIFFUSE),
+    )));
+    // Left plane
+    scene.add(Box::new(Plane::new(
+        2.75,
+        Vector3d::new(0., 1., 0.),
+        Material::new(Vector3d::new(10., 2., 2.), 0., MaterialType::DIFFUSE),
+    )));
+    // Right plane
+    scene.add(Box::new(Plane::new(
+        2.75,
+        Vector3d::new(0., -1., 0.),
+        Material::new(Vector3d::new(2., 10., 2.), 0., MaterialType::DIFFUSE),
+    )));
+    // Ceiling plane
+    scene.add(Box::new(Plane::new(
+        3.0,
+        Vector3d::new(1., 0., 0.),
+        Material::new(Vector3d::new(6., 6., 6.), 0., MaterialType::DIFFUSE),
+    )));
+    // Front plane
+    scene.add(Box::new(Plane::new(
+        0.5,
+        Vector3d::new(0., 0., -1.),
+        Material::new(Vector3d::new(6., 6., 6.), 0., MaterialType::DIFFUSE),
+    )));
+    // Light
+    scene.add(Box::new(Sphere::new(
+        0.5,
+        Vector3d::new(-1.9, 0., -3.),
+        Material::new(Vector3d::new(0., 0., 0.), 120., MaterialType::DIFFUSE),
+    )));
 
     let mut canvas = Canvas::new(size, size);
 
@@ -604,7 +599,7 @@ fn main() {
         512,
         Params {
             refractive_index: 1.5,
-            samples_per_pixel: 200,
+            samples_per_pixel: 50,
         },
     );
     println!("{}", canvas.to_ppm());
