@@ -310,7 +310,7 @@ impl Canvas {
         return sample / 700.;
     }
 
-    pub fn camcr(&self, x: usize, y: usize) -> Vector3d {
+    pub fn camcr(&self, x: usize, y: usize) -> Ray {
         let w: f64 = self.width as f64;
         let h: f64 = self.height as f64;
         let fovx: f32 = std::f32::consts::FRAC_PI_4;
@@ -322,7 +322,7 @@ impl Canvas {
         );
         cam.x += self.jitter();
         cam.y += self.jitter();
-        return cam;
+        Ray::new(Vector3d::default(), cam.norm())
     }
     pub fn add_color(&mut self, x: usize, y: usize, color: Vector3d) {
         if x <= self.width && y <= self.height {
@@ -561,38 +561,63 @@ fn render(size: usize, params: Params) -> Canvas {
 
     let mut canvas = Canvas::new(size, size);
 
-    // correlated Halton-sequence dimensions
-    let hal1 = Halton::new(0, 2);
-    let hal2 = Halton::new(0, 2);
+    // // correlated Halton-sequence dimensions
+    // let mut hal1 = Halton::new(0, 2);
+    // let mut hal2 = Halton::new(0, 2);
 
-    (0..params.samples_per_pixel).into_par_iter().for_each_with(
-        (hal1, hal2),
-        |(mut hal1, mut hal2), s| {
-            // for s in 0..params.samples_per_pixel {
-            eprintln!("sample={}", s);
-            // #pragma omp parallel for schedule(dynamic) firstprivate(hal, hal2)
-            for row in 0..canvas.height {
-                for column in 0..canvas.width {
+    let mut data = vec![vec![Vector3d::default(); canvas.width]; canvas.height];
+    data.par_iter_mut()
+        // .chunks_mut(1) // iterate each column
+        .enumerate() // generate an index for each column we're iterating
+        .for_each(|(col_index, row)| {
+            eprintln!("Col={}", col_index);
+
+            // correlated Halton-sequence dimensions
+            let mut hal1 = Halton::new(0, 2);
+            let mut hal2 = Halton::new(0, 2);
+            for (row_index, pixel) in row.iter_mut().enumerate() {
+                for _ in 0..params.samples_per_pixel {
                     let mut color = Vector3d::default();
-                    let cam = canvas.camcr(column, row);
-                    let mut ray = Ray::new(Vector3d::default(), cam.norm());
-                    let log = false; //column == 359 && row == 420;
-
-                    if log {
-                        eprintln!("ray_before={:?}", ray);
-                    }
+                    let mut ray = canvas.camcr(col_index, row_index);
                     trace(
-                        &mut ray, &scene, 0, &mut color, params, &mut hal1, &mut hal2, log,
+                        &mut ray, &scene, 0, &mut color, params, &mut hal1, &mut hal2, false,
                     );
-                    canvas.add_color(row, column, color);
-                    if log {
-                        eprintln!("final_color={}, ray_after={:?}", color, ray);
-                    }
+                    *pixel += color;
                 }
             }
-            // }
-        },
-    );
+            // eprintln!("Col={}, row={:?}", column_index, row);
+            // eprintln!("Col={}", column_index);
+        });
+
+    canvas.data = data;
+    // (0..params.samples_per_pixel).into_par_iter().for_each_with(
+    //     (hal1, hal2),
+    //     |(mut hal1, mut hal2), s| {
+    //         // for s in 0..params.samples_per_pixel {
+    //         eprintln!("sample={}", s);
+    //         // #pragma omp parallel for schedule(dynamic) firstprivate(hal, hal2)
+    //         for row in 0..canvas.height {
+    //             for column in 0..canvas.width {
+    //                 let mut color = Vector3d::default();
+    //                 let cam = canvas.camcr(column, row);
+    //                 let mut ray = Ray::new(Vector3d::default(), cam.norm());
+    //                 let log = false; //column == 359 && row == 420;
+
+    //                 if log {
+    //                     eprintln!("ray_before={:?}", ray);
+    //                 }
+    //                 trace(
+    //                     &mut ray, &scene, 0, &mut color, params, &mut hal1, &mut hal2, log,
+    //                 );
+    //                 canvas.add_color(row, column, color);
+    //                 if log {
+    //                     eprintln!("final_color={}, ray_after={:?}", color, ray);
+    //                 }
+    //             }
+    //         }
+    //         // }
+    //     },
+    // );
     canvas
 }
 
