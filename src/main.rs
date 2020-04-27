@@ -309,11 +309,8 @@ impl Canvas {
     }
 
     // scale/clamp color values from 0-1 to 0-255
-    fn scale_color(&self, norm_by: f64, rgb: f64) -> u8 {
-        ((rgb / norm_by) as u8)
-            // ((rgb / norm_by as f64) * MAX_PPM_COLOR_VAL as f64)
-            .min(MAX_PPM_COLOR_VAL)
-            .max(0)
+    fn scale_color(&self, norm_by: u64, rgb: f64) -> u8 {
+        (rgb as u64 / norm_by).min(MAX_PPM_COLOR_VAL).max(0) as u8
     }
 
     // If current line has no more room for more RGB values, add it to the PPM string and clear it;
@@ -329,7 +326,7 @@ impl Canvas {
     }
 
     // Return string containing PPM (portable pixel map) data representing current canvas
-    pub fn to_ppm(&self, samples_per_pixel: u32) -> String {
+    pub fn to_ppm(&self, samples_per_pixel: u64) -> String {
         let mut ppm = String::new();
         // write header
         ppm.push_str("P3\n");
@@ -344,9 +341,9 @@ impl Canvas {
             current_line.clear();
             for (i, column) in (0..self.width).enumerate() {
                 let color = self.pixel_at(column, row);
-                let r = self.scale_color(samples_per_pixel as f64, color.x);
-                let g = self.scale_color(samples_per_pixel as f64, color.y);
-                let b = self.scale_color(samples_per_pixel as f64, color.z);
+                let r = self.scale_color(samples_per_pixel, color.x);
+                let g = self.scale_color(samples_per_pixel, color.y);
+                let b = self.scale_color(samples_per_pixel, color.z);
 
                 current_line.push_str(&r.to_string());
                 self.write_rgb_separator(&mut current_line, &mut ppm);
@@ -378,7 +375,7 @@ pub struct Camera {
 
 unsafe impl Sync for Canvas {}
 
-const MAX_PPM_COLOR_VAL: u8 = 255;
+const MAX_PPM_COLOR_VAL: u64 = 255;
 const MAX_PPM_LINE_LENGTH: usize = 70;
 // length of "255" is 3
 // TODO: this should be evaluated programmatically, but "no matching in consts allowed" error prevented this
@@ -428,7 +425,7 @@ fn hemisphere(u1: f64, u2: f64) -> Vector3d {
 #[derive(Copy, Clone, Debug, PartialEq, Default)]
 pub struct Params {
     refractive_index: f64,
-    samples_per_pixel: u32,
+    samples_per_pixel: u64,
 }
 
 fn trace(
