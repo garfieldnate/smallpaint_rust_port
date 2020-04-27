@@ -3,6 +3,7 @@ use rand::{thread_rng, Rng};
 use rayon::prelude::*;
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Mul, Sub};
+use thread_local::CachedThreadLocal;
 
 const EPSILON: f64 = 1e-4;
 
@@ -282,53 +283,25 @@ impl Halton {
     }
 }
 
-#[derive(Clone, Debug)]
 pub struct Canvas {
     pub width: usize,
     pub height: usize,
     data: Vec<Vec<Vector3d>>,
 }
 
-unsafe impl Sync for Canvas {}
-
-const MAX_PPM_COLOR_VAL: u8 = 255;
-const MAX_PPM_LINE_LENGTH: usize = 70;
-// length of "255" is 3
-// TODO: this should be evaluated programmatically, but "no matching in consts allowed" error prevented this
-const MAX_COLOR_VAL_STR_LEN: usize = 3;
 impl Canvas {
-    // Create a canvas initialized to all black
-    pub fn new(width: usize, height: usize) -> Canvas {
-        Canvas {
-            width,
-            height,
-            data: vec![vec![Vector3d::default(); width]; height],
-        }
-    }
-    fn jitter(&self) -> f64 {
-        let sample: f64 = thread_rng().sample(OpenClosed01);
-        return sample / 700.;
-    }
-
-    pub fn camcr(&self, x: usize, y: usize) -> Ray {
-        let w: f64 = self.width as f64;
-        let h: f64 = self.height as f64;
-        let fovx: f32 = std::f32::consts::FRAC_PI_4;
-        let fovy: f32 = (h / w) as f32 * fovx;
-        let mut cam = Vector3d::new(
-            ((2. * x as f64 - w) / w) * fovx.tan() as f64,
-            ((2. * y as f64 - h) / h) * fovy.tan() as f64,
-            -1.,
-        );
-        cam.x += self.jitter();
-        cam.y += self.jitter();
-        Ray::new(Vector3d::default(), cam.norm())
-    }
-    pub fn add_color(&mut self, x: usize, y: usize, color: Vector3d) {
-        if x <= self.width && y <= self.height {
-            self.data[y][x] += color;
-        } else {
-        }
+    pub fn write_data_parallel<F>(&mut self, processor: F)
+    where
+        F: Fn(usize, usize, &mut Vector3d) + Sync,
+    {
+        self.data
+            .par_iter_mut()
+            .enumerate() // generate an index for each column we're iterating
+            .for_each(|(col_index, row)| {
+                for (row_index, pixel) in row.iter_mut().enumerate() {
+                    processor(row_index, col_index, pixel);
+                }
+            });
     }
 
     pub fn pixel_at(&self, x: usize, y: usize) -> Vector3d {
@@ -394,6 +367,53 @@ impl Canvas {
             }
         }
         ppm
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Camera {
+    pub width: usize,
+    pub height: usize,
+}
+
+unsafe impl Sync for Canvas {}
+
+const MAX_PPM_COLOR_VAL: u8 = 255;
+const MAX_PPM_LINE_LENGTH: usize = 70;
+// length of "255" is 3
+// TODO: this should be evaluated programmatically, but "no matching in consts allowed" error prevented this
+const MAX_COLOR_VAL_STR_LEN: usize = 3;
+impl Camera {
+    // Create a canvas initialized to all black
+    pub fn new(width: usize, height: usize) -> Camera {
+        Camera { width, height }
+    }
+    fn jitter(&self) -> f64 {
+        let sample: f64 = thread_rng().sample(OpenClosed01);
+        return sample / 700.;
+    }
+
+    pub fn camcr(&self, x: usize, y: usize) -> Ray {
+        let w: f64 = self.width as f64;
+        let h: f64 = self.height as f64;
+        let fovx: f32 = std::f32::consts::FRAC_PI_4;
+        let fovy: f32 = (h / w) as f32 * fovx;
+        let mut cam = Vector3d::new(
+            ((2. * x as f64 - w) / w) * fovx.tan() as f64,
+            ((2. * y as f64 - h) / h) * fovy.tan() as f64,
+            -1.,
+        );
+        cam.x += self.jitter();
+        cam.y += self.jitter();
+        Ray::new(Vector3d::default(), cam.norm())
+    }
+
+    pub fn get_blank_canvas(&self) -> Canvas {
+        Canvas {
+            width: self.width,
+            height: self.height,
+            data: vec![vec![Vector3d::default(); self.width]; self.height],
+        }
     }
 }
 
@@ -547,28 +567,25 @@ fn render(size: usize, params: Params) -> Canvas {
         Material::new(Vector3d::new(0., 0., 0.), 120., MaterialType::DIFFUSE),
     )));
 
-    let mut canvas = Canvas::new(size, size);
+    let camera = Camera::new(size, size);
+    let mut canvas = camera.get_blank_canvas();
 
-    let mut data = vec![vec![Vector3d::default(); canvas.width]; canvas.height];
-    data.par_iter_mut()
-        .enumerate() // generate an index for each column we're iterating
-        .for_each(|(col_index, row)| {
-            // correlated Halton-sequence dimensions
-            let mut hal1 = Halton::new(0, 2);
-            let mut hal2 = Halton::new(0, 2);
-            for (row_index, pixel) in row.iter_mut().enumerate() {
-                for _ in 0..params.samples_per_pixel {
-                    let mut color = Vector3d::default();
-                    let mut ray = canvas.camcr(col_index, row_index);
-                    trace(
-                        &mut ray, &scene, 0, &mut color, params, &mut hal1, &mut hal2, false,
-                    );
-                    *pixel += color;
-                }
-            }
-        });
+    let hal1_thread_local: CachedThreadLocal<Halton> = CachedThreadLocal::new();
+    let hal2_thread_local: CachedThreadLocal<Halton> = CachedThreadLocal::new();
+    canvas.write_data_parallel(|row_index, col_index, pixel| {
+        // correlated Halton-sequence dimensions
+        let mut hal1 = *hal1_thread_local.get_or(|| Halton::new(0, 2));
+        let mut hal2 = *hal2_thread_local.get_or(|| Halton::new(0, 2));
+        for _ in 0..params.samples_per_pixel {
+            let mut color = Vector3d::default();
+            let mut ray = camera.camcr(col_index, row_index);
+            trace(
+                &mut ray, &scene, 0, &mut color, params, &mut hal1, &mut hal2, false,
+            );
+            *pixel += color;
+        }
+    });
 
-    canvas.data = data;
     canvas
 }
 
