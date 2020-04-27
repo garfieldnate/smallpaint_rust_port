@@ -291,7 +291,7 @@ pub struct Canvas {
 
 unsafe impl Sync for Canvas {}
 
-const MAX_PPM_COLOR_VAL: u16 = 255;
+const MAX_PPM_COLOR_VAL: u8 = 255;
 const MAX_PPM_LINE_LENGTH: usize = 70;
 // length of "255" is 3
 // TODO: this should be evaluated programmatically, but "no matching in consts allowed" error prevented this
@@ -337,9 +337,10 @@ impl Canvas {
 
     // scale/clamp color values from 0-1 to 0-255
     fn scale_color(&self, norm_by: f64, rgb: f64) -> u8 {
-        ((rgb / norm_by) * MAX_PPM_COLOR_VAL as f64)
-            .min(MAX_PPM_COLOR_VAL as f64)
-            .max(0.0) as u8
+        ((rgb / norm_by) as u8)
+            // ((rgb / norm_by as f64) * MAX_PPM_COLOR_VAL as f64)
+            .min(MAX_PPM_COLOR_VAL)
+            .max(0)
     }
 
     // If current line has no more room for more RGB values, add it to the PPM string and clear it;
@@ -354,26 +355,13 @@ impl Canvas {
         }
     }
 
-    pub fn determine_max_color_value(&self) -> f64 {
-        let mut max_val: f64 = 0.;
-        for row in 0..self.height {
-            for column in 0..self.width {
-                let color = self.pixel_at(column, row);
-                max_val = max_val.max(color.x).max(color.y).max(color.z);
-            }
-        }
-        max_val
-    }
-
     // Return string containing PPM (portable pixel map) data representing current canvas
-    pub fn to_ppm(&self) -> String {
+    pub fn to_ppm(&self, samples_per_pixel: u32) -> String {
         let mut ppm = String::new();
         // write header
         ppm.push_str("P3\n");
         ppm.push_str(&(format!("{} {}\n", self.width, self.height)));
         ppm.push_str(&(format!("{}\n", MAX_PPM_COLOR_VAL)));
-
-        let max_color_val = self.determine_max_color_value();
 
         // Write pixel data. Each pixel RGB value is written with a separating space or newline;
         // new rows are written on new lines for human reading convenience, but lines longer than
@@ -383,9 +371,9 @@ impl Canvas {
             current_line.clear();
             for (i, column) in (0..self.width).enumerate() {
                 let color = self.pixel_at(column, row);
-                let r = self.scale_color(max_color_val, color.x);
-                let g = self.scale_color(max_color_val, color.y);
-                let b = self.scale_color(max_color_val, color.z);
+                let r = self.scale_color(samples_per_pixel as f64, color.x);
+                let g = self.scale_color(samples_per_pixel as f64, color.y);
+                let b = self.scale_color(samples_per_pixel as f64, color.z);
 
                 current_line.push_str(&r.to_string());
                 self.write_rgb_separator(&mut current_line, &mut ppm);
@@ -420,7 +408,7 @@ fn hemisphere(u1: f64, u2: f64) -> Vector3d {
 #[derive(Copy, Clone, Debug, PartialEq, Default)]
 pub struct Params {
     refractive_index: f64,
-    samples_per_pixel: i32,
+    samples_per_pixel: u32,
 }
 
 fn trace(
@@ -561,17 +549,10 @@ fn render(size: usize, params: Params) -> Canvas {
 
     let mut canvas = Canvas::new(size, size);
 
-    // // correlated Halton-sequence dimensions
-    // let mut hal1 = Halton::new(0, 2);
-    // let mut hal2 = Halton::new(0, 2);
-
     let mut data = vec![vec![Vector3d::default(); canvas.width]; canvas.height];
     data.par_iter_mut()
-        // .chunks_mut(1) // iterate each column
         .enumerate() // generate an index for each column we're iterating
         .for_each(|(col_index, row)| {
-            eprintln!("Col={}", col_index);
-
             // correlated Halton-sequence dimensions
             let mut hal1 = Halton::new(0, 2);
             let mut hal2 = Halton::new(0, 2);
@@ -585,49 +566,17 @@ fn render(size: usize, params: Params) -> Canvas {
                     *pixel += color;
                 }
             }
-            // eprintln!("Col={}, row={:?}", column_index, row);
-            // eprintln!("Col={}", column_index);
         });
 
     canvas.data = data;
-    // (0..params.samples_per_pixel).into_par_iter().for_each_with(
-    //     (hal1, hal2),
-    //     |(mut hal1, mut hal2), s| {
-    //         // for s in 0..params.samples_per_pixel {
-    //         eprintln!("sample={}", s);
-    //         // #pragma omp parallel for schedule(dynamic) firstprivate(hal, hal2)
-    //         for row in 0..canvas.height {
-    //             for column in 0..canvas.width {
-    //                 let mut color = Vector3d::default();
-    //                 let cam = canvas.camcr(column, row);
-    //                 let mut ray = Ray::new(Vector3d::default(), cam.norm());
-    //                 let log = false; //column == 359 && row == 420;
-
-    //                 if log {
-    //                     eprintln!("ray_before={:?}", ray);
-    //                 }
-    //                 trace(
-    //                     &mut ray, &scene, 0, &mut color, params, &mut hal1, &mut hal2, log,
-    //                 );
-    //                 canvas.add_color(row, column, color);
-    //                 if log {
-    //                     eprintln!("final_color={}, ray_after={:?}", color, ray);
-    //                 }
-    //             }
-    //         }
-    //         // }
-    //     },
-    // );
     canvas
 }
 
 fn main() {
-    let canvas = render(
-        512,
-        Params {
-            refractive_index: 1.5,
-            samples_per_pixel: 50,
-        },
-    );
-    println!("{}", canvas.to_ppm());
+    let params = Params {
+        refractive_index: 1.5,
+        samples_per_pixel: 50,
+    };
+    let canvas = render(512, params);
+    println!("{}", canvas.to_ppm(params.samples_per_pixel));
 }
