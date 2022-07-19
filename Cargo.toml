@@ -9,5 +9,5 @@ edition = "2018"
 [dependencies]
 rand = "0.7"
 rayon = "1.1"
-thread_local = "1.0.1"
+thread_local = "1.1.4"
 clap = "2.33.0"
